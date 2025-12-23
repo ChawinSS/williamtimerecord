@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>William The Time Tracking App</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<style>
+body {
+  font-family: Arial, sans-serif;
+  max-width: 1200px;
+  margin: 40px auto;
+  font-size: 14px;
+}
+
+button {
+  padding: 8px 12px;
+  margin: 5px;
+  font-size: 14px;
+}
+
+/* ===== TABLE STYLING (CONSISTENT TEXT SIZE) ===== */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 20px;
+  font-size: 14px; /* ONE source of truth */
+}
+
+th, td {
+  border: 1px solid #ccc;
+  padding: 8px;
+  vertical-align: top;
+  font-size: 14px; /* force same size everywhere */
+}
+
+th {
+  font-weight: 600; /* header emphasis without bigger text */
+}
+
+.small {
+  font-size: 14px; /* pause start/end same size */
+  color: #555;
+}
+
+/* ===== STATUS & RANGE PICKER ===== */
+
+.status {
+  margin-top: 15px;
+  font-weight: bold;
+  font-size: 14px;
+}
+
+#rangePicker {
+  display: none;
+  margin-top: 20px;
+  border: 1px solid #ccc;
+  padding: 15px;
+  font-size: 14px;
+}
+</style>
+
+</head>
+
+<body>
+
+<h2>⏱ William The Time Tracking App</h2>
+
+<button onclick="clockIn()">Clock In</button>
+<button onclick="pauseStart()">Pause Start</button>
+<button onclick="pauseEnd()">Pause End</button>
+<button onclick="clockOut()">Clock Out</button>
+
+<button onclick="exportCSV()">Export CSV</button>
+<button onclick="exportPDF()">Export PDF</button>
+<button onclick="openRangePicker()">Calculate Accumulated Hours</button>
+
+<button onclick="deleteAllData()" style="background:#c62828;color:white;">
+  Delete All Data
+</button>
+
+<div class="status" id="status">Status: Not working</div>
+
+<table>
+<thead>
+<tr>
+  <th>Date</th>
+  <th>Clock In</th>
+  <th>Clock Out</th>
+  <th>Pause Start</th>
+  <th>Pause End</th>
+  <th>Total Pause (min)</th>
+  <th>Work Time (min)</th>
+  <th>Work Time (h)</th>
+</tr>
+</thead>
+<tbody id="tableBody"></tbody>
+</table>
+
+<div id="rangePicker">
+  <h3>📅 Select Date Range</h3>
+  <label>From:</label>
+  <input type="date" id="fromDate">
+  <label>To:</label>
+  <input type="date" id="toDate">
+  <br><br>
+  <button onclick="generateRangePDF()">Generate PDF</button>
+  <button onclick="closeRangePicker()">Cancel</button>
+</div>
+
+<script>
+let records = JSON.parse(localStorage.getItem("records")) || [];
+let current = JSON.parse(localStorage.getItem("current")) || null;
+
+function now() {
+  return new Date();
+}
+
+/* ✅ CONSISTENT FORMATTERS */
+function formatDate(d) {
+  return new Date(d).toISOString().split("T")[0];
+}
+
+function formatTime(t) {
+  return new Date(t).toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+}
+
+function clockIn() {
+  if (current) return alert("Already clocked in");
+  current = {
+    date: formatDate(now()),
+    clockIn: now(),
+    clockOut: null,
+    pauses: [],
+    pauseStart: null
+  };
+  saveCurrent();
+  updateStatus();
+}
+
+function pauseStart() {
+  if (!current) return alert("Not clocked in");
+  if (current.pauseStart) return alert("Pause already active");
+  current.pauseStart = now();
+  saveCurrent();
+  updateStatus();
+}
+
+function pauseEnd() {
+  if (!current || !current.pauseStart) return alert("No pause active");
+  current.pauses.push({ start: current.pauseStart, end: now() });
+  current.pauseStart = null;
+  saveCurrent();
+  updateStatus();
+}
+
+function clockOut() {
+  if (!current) return alert("Not clocked in");
+  if (current.pauseStart) pauseEnd();
+  current.clockOut = now();
+  records.push(current);
+  localStorage.setItem("records", JSON.stringify(records));
+  current = null;
+  localStorage.removeItem("current");
+  render();
+  updateStatus();
+}
+
+function calculatePauseMinutes(pauses) {
+  return pauses.reduce((sum, p) => sum + (new Date(p.end) - new Date(p.start)) / 60000, 0);
+}
+
+function render() {
+  const tbody = document.getElementById("tableBody");
+  tbody.innerHTML = "";
+
+  records.forEach(r => {
+    const pauseMin = calculatePauseMinutes(r.pauses);
+    const totalMin = (new Date(r.clockOut) - new Date(r.clockIn)) / 60000;
+    const workMin = totalMin - pauseMin;
+
+    tbody.innerHTML += `
+      <tr>
+        <td>${r.date}</td>
+        <td>${formatTime(r.clockIn)}</td>
+        <td>${formatTime(r.clockOut)}</td>
+        <td class="small">${r.pauses.map(p => formatTime(p.start)).join("<br>") || "-"}</td>
+        <td class="small">${r.pauses.map(p => formatTime(p.end)).join("<br>") || "-"}</td>
+        <td>${pauseMin.toFixed(1)}</td>
+        <td>${workMin.toFixed(1)}</td>
+        <td>${(workMin / 60).toFixed(2)}</td>
+      </tr>
+    `;
+  });
+}
+
+function updateStatus() {
+  const status = document.getElementById("status");
+  if (!current) status.textContent = "Status: Not working";
+  else if (current.pauseStart) status.textContent = "Status: On pause";
+  else status.textContent = "Status: Working";
+}
+
+function saveCurrent() {
+  localStorage.setItem("current", JSON.stringify(current));
+}
+
+function exportCSV() {
+  let csv = "Date,Clock In,Clock Out,Pause(min),Work(min),Work(h)\n";
+  records.forEach(r => {
+    const pauseMin = calculatePauseMinutes(r.pauses);
+    const workMin = ((new Date(r.clockOut) - new Date(r.clockIn)) / 60000) - pauseMin;
+    csv += `${r.date},${formatTime(r.clockIn)},${formatTime(r.clockOut)},${pauseMin.toFixed(1)},${workMin.toFixed(1)},${(workMin/60).toFixed(2)}\n`;
+  });
+  const blob = new Blob([csv], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "time_tracking.csv";
+  a.click();
+}
+
+function exportPDF() {
+  generateAccumulatedPDF(records, "ALL", "ALL");
+}
+
+function deleteAllData() {
+  if (!confirm("Delete ALL data permanently?")) return;
+  records = [];
+  current = null;
+  localStorage.clear();
+  render();
+  updateStatus();
+}
+
+function openRangePicker() {
+  document.getElementById("rangePicker").style.display = "block";
+}
+
+function closeRangePicker() {
+  document.getElementById("rangePicker").style.display = "none";
+}
+
+function generateRangePDF() {
+  const from = document.getElementById("fromDate").value;
+  const to = document.getElementById("toDate").value;
+  if (!from || !to) return alert("Select both dates");
+
+  const fromDate = new Date(from);
+  const toDate = new Date(to);
+  toDate.setHours(23,59,59);
+
+  const filtered = records.filter(r => {
+    const d = new Date(r.clockIn);
+    return d >= fromDate && d <= toDate;
+  });
+
+  if (!filtered.length) return alert("No data in range");
+
+  generateAccumulatedPDF(filtered, from, to);
+  closeRangePicker();
+}
+
+function generateAccumulatedPDF(data, from, to) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+
+  doc.text("Accumulated Work Report", 10, 10);
+  doc.text(`From: ${from}  To: ${to}`, 10, 18);
+
+  let y = 30;
+  let totalMin = 0;
+
+  data.forEach(r => {
+    const pauseMin = calculatePauseMinutes(r.pauses);
+    const workMin = ((new Date(r.clockOut) - new Date(r.clockIn)) / 60000) - pauseMin;
+    totalMin += workMin;
+
+    doc.text(`${r.date} | ${workMin.toFixed(1)} min (${(workMin/60).toFixed(2)} h)`, 10, y);
+    y += 7;
+    if (y > 270) { doc.addPage(); y = 20; }
+  });
+
+  doc.setFont(undefined, "bold");
+  doc.text(`TOTAL: ${totalMin.toFixed(1)} min (${(totalMin/60).toFixed(2)} h)`, 10, y + 10);
+  doc.save(`work_summary_${from}_${to}.pdf`);
+}
+
+render();
+updateStatus();
+</script>
+
+</body>
+</html>
